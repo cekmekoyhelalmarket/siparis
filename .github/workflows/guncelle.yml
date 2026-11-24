@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 30
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy2.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,10 +36,11 @@ jobs:
         run: pip install requests beautifulsoup4
 
       - name: Ürünleri çek
-        continue-on-error: true      # site geçici olarak erişilemezse son veriyle yayına devam et
+        continue-on-error: true      # site geçici olarak erişilemezse son veriyle devam et
         run: python scraper.py
 
       - name: Değişiklik varsa kaydet
+        id: kaydet
         run: |
           if [ -n "$(git status --porcelain public/data.json)" ]; then
             git config user.name "katalog-bot"
@@ -47,13 +48,34 @@ jobs:
             git add public/data.json
             git commit -m "Ürün listesi güncellendi"
             git push
+            echo "degisti=evet" >> "$GITHUB_OUTPUT"
           else
-            echo "Değişiklik yok"
+            echo "Değişiklik yok, yayın atlanıyor"
+            echo "degisti=hayir" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      # Sadece ürün listesi değiştiyse ya da elle/dosya yüklemeyle çalıştırıldıysa yayınla
+      - name: Yayın hazırlığı
+        if: steps.kaydet.outputs.degisti == 'evet' || github.event_name != 'schedule'
+        uses: actions/configure-pages@v5
+
+      - name: Dosyaları paketle
+        if: steps.kaydet.outputs.degisti == 'evet' || github.event_name != 'schedule'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: public
-      - id: deploy
+
+      - name: Yayınla
+        id: deploy
+        if: steps.kaydet.outputs.degisti == 'evet' || github.event_name != 'schedule'
+        continue-on-error: true      # GitHub tarafında geçici hata olursa aşağıda tekrar denenir
+        uses: actions/deploy-pages@v4
+
+      - name: Bekle (GitHub'ın geçici hatası için)
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 60
+
+      - name: Yayınla (2. deneme)
+        id: deploy2
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v4
