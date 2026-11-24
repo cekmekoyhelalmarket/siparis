@@ -74,6 +74,12 @@ main{max-width:1100px;margin:0 auto;padding:16px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:12px}
 @media(max-width:480px){.grid{grid-template-columns:repeat(2,1fr);gap:8px}}
 .card{background:var(--card);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;border:1px solid var(--line)}
+.card{position:relative}
+.disc{position:absolute;top:8px;left:8px;background:#e53935;color:#fff;font-weight:700;font-size:12px;padding:3px 9px;border-radius:999px;z-index:1}
+.hscroll{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(165px,180px);gap:10px;overflow-x:auto;padding-bottom:8px;margin-bottom:26px;scroll-snap-type:x mandatory}
+.hscroll .card{scroll-snap-align:start}
+.see{background:none;color:var(--brand);font-weight:700;font-size:14px;white-space:nowrap}
+.deals-head h2{color:#c62828}
 .card .img{aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:#fff;padding:8px}
 .card .img img{max-width:100%;max-height:100%;object-fit:contain}
 .card .body{padding:10px 12px 12px;display:flex;flex-direction:column;gap:4px;flex:1}
@@ -168,7 +174,7 @@ const IMG_BASE = "https://helaldunyamarketleri.com/images/thumbs/";
 
 // ===== VERİ (Çekmeköy şubesi stok listesi) =====
 const OTHER = -1;
-let BRANDS=[], PRODUCTS=[], BYID={}, COUNT={}, READY=null;
+let BRANDS=[], PRODUCTS=[], BYID={}, COUNT={}, DEALS=[], READY=null;
 const tl = k => "₺" + (k/100).toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2});
 function loadData(){
   if(READY) return READY;
@@ -179,6 +185,7 @@ function loadData(){
       PRODUCTS = DATA.P.map(p=>({id:String(p[0]), name:p[1], img: p[2].startsWith("default") ? "" : IMG_BASE + p[2].replace("~","_360."), b:p[3], price:p[4]||0, old:p[5]||0}));
       BYID = Object.fromEntries(PRODUCTS.map(p=>[p.id,p]));
       COUNT = {}; PRODUCTS.forEach(p=>COUNT[p.b]=(COUNT[p.b]||0)+1);
+      DEALS = PRODUCTS.filter(p=>p.price>0 && p.old>p.price).sort((a,b)=>(b.old-b.price)/b.old-(a.old-a.price)/a.old);
     });
   return READY;
 }
@@ -200,6 +207,26 @@ function imgTag(src, text, i){
   return `<img loading="lazy" src="${src}" alt="" data-ph="${esc(text)}" data-i="${i}" onerror="this.outerHTML=ph(this.dataset.ph,+this.dataset.i)">`;
 }
 
+// ===== KAYNAK TAKİBİ =====
+// Linke ?k=... ekleyerek siparişin nereden geldiği görülür. Örn: ?k=reklam, ?k=bio, ?k=qr
+const SRC_NAMES={ig:"Instagram",instagram:"Instagram",reklam:"Instagram reklam",igr:"Instagram reklam",bio:"Instagram profil",hikaye:"Instagram hikâye",story:"Instagram hikâye",fb:"Facebook",facebook:"Facebook",google:"Google",harita:"Google Haritalar",qr:"Mağaza QR",wa:"WhatsApp",durum:"WhatsApp Durum"};
+function detectSource(){
+  let s=null;
+  try{ const u=new URLSearchParams(location.search); s=u.get("k")||u.get("kaynak")||u.get("utm_source"); }catch(e){}
+  if(s){ s=s.toLowerCase(); s=SRC_NAMES[s]||s; }
+  else{
+    const ua=navigator.userAgent||"", ref=document.referrer||"";
+    if(/Instagram/i.test(ua)||/instagram\./i.test(ref)) s="Instagram";
+    else if(/FBAN|FBAV/i.test(ua)||/facebook\./i.test(ref)) s="Facebook";
+    else if(/google\./i.test(ref)) s="Google";
+  }
+  if(s){ store.set("hm_src",{s,t:Date.now()}); return s; }
+  const old=store.get("hm_src");
+  if(old && old.s && Date.now()-old.t < 30*864e5) return old.s;
+  return "Doğrudan";
+}
+const SOURCE=detectSource();
+
 // ===== DURUM =====
 let user=null, cart={}, view={type:"brands"}, shown=60;
 
@@ -220,7 +247,9 @@ function start(){
   cart=store.get("hm_cart")||{};
   for(const id in cart) if(!BYID[id]) delete cart[id];   // stoktan kalkan ürünleri temizle
   store.set("hm_cart",cart);
-  updateBadge(); render();
+  updateBadge();
+  if(location.hash==="#firsatlar" && DEALS.length) view={type:"deals"};
+  render();
   }).catch(()=>{ READY=null; $("view").innerHTML=`<div class="empty">Ürünler yüklenemedi. <button class="more" onclick="start()">Tekrar dene</button></div>`; });
 }
 
@@ -234,7 +263,9 @@ function render(){
   if(view.type==="brands"){
     const order=BRANDS.filter(b=>COUNT[b.i]).map(b=>b.i);
     if(COUNT[OTHER]) order.push(OTHER);
-    V.innerHTML=`<div class="section-head"><h2>Markalar</h2><small>${PRODUCTS.length} ürün</small></div>
+    const dealsHtml = DEALS.length ? `<div class="section-head deals-head"><h2>🔥 Fırsat Ürünleri</h2><button class="see" data-deals>Tümünü gör (${DEALS.length}) →</button></div>
+      <div class="hscroll">${DEALS.slice(0,12).map(card).join("")}</div>` : "";
+    V.innerHTML=dealsHtml+`<div class="section-head"><h2>Markalar</h2><small>${PRODUCTS.length} ürün</small></div>
       <div class="brands">${order.map(i=>`
         <button class="brand" data-brand="${i}">
           <div class="lg">${i===OTHER?ph("+",7):imgTag(BRANDS[i].logo,BRANDS[i].name,i)}</div>
@@ -244,13 +275,15 @@ function render(){
   }
   let list, title;
   if(view.type==="brand"){ list=PRODUCTS.filter(p=>p.b===view.b); title=brandName(view.b); }
+  else if(view.type==="deals"){ list=DEALS; title="🔥 Fırsat Ürünleri"; }
   else { const words=tr(view.q).split(/\s+/); list=PRODUCTS.filter(p=>{const n=tr(p.name+" "+brandName(p.b)); return words.every(w=>n.includes(w));}); title=`“${esc(view.q)}” için sonuçlar`; }
   V.innerHTML=`<div class="section-head"><button class="back" data-back>← Markalar</button><h2>${esc(title)}</h2><small>${list.length} ürün</small></div>
     ${list.length?`<div class="grid">${list.slice(0,shown).map(card).join("")}</div>`:`<div class="empty">Ürün bulunamadı.</div>`}
     ${list.length>shown?`<button class="more" data-more>Daha fazla göster (${list.length-shown})</button>`:""}`;
 }
 function card(p){
-  return `<div class="card" data-card="${p.id}">
+  const pct = p.price>0 && p.old>p.price ? Math.round((p.old-p.price)/p.old*100) : 0;
+  return `<div class="card" data-card="${p.id}">${pct>=1?`<span class="disc">%${pct} indirim</span>`:""}
     <div class="img">${imgTag(p.img,p.name,+p.id)}</div>
     <div class="body"><div class="name">${esc(p.name)}</div><div class="meta">${esc(brandName(p.b))}</div>
     ${p.price?`<div class="price">${tl(p.price)}${p.old>p.price?`<s>${tl(p.old)}</s>`:""}</div><div class="pnote">Güncel fiyatlandırma için siparişinizi gönderebilirsiniz.</div>`:""}
@@ -266,6 +299,7 @@ function ctrl(id){
 document.addEventListener("click", e=>{
   const t=e.target;
   const br=t.closest("[data-brand]"); if(br){ $("q").value=""; go({type:"brand",b:+br.dataset.brand}); return; }
+  if(t.closest("[data-deals]")){ $("q").value=""; go({type:"deals"}); return; }
   if(t.closest("[data-back]")){ $("q").value=""; go({type:"brands"}); return; }
   if(t.closest("[data-more]")){ shown+=60; render(); return; }
   const b=t.closest("[data-a]"); if(!b) return;
@@ -313,7 +347,9 @@ Telefon: 0${user.tel}
 ${lines.join("\n")}
 
 Toplam: ${ids.length} çeşit, ${count()} adet
-Tahmini tutar: ${tl(total())}${note?"\nNot: "+note:""}`;
+Tahmini tutar: ${tl(total())}${note?"\nNot: "+note:""}
+
+Kaynak: ${SOURCE}`;
   return `https://wa.me/${WHATSAPP_NO}?text=${encodeURIComponent(msg)}`;
 }
 $("sendBtn").addEventListener("click",()=>{
